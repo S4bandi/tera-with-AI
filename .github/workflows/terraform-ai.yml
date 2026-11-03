@@ -1,0 +1,60 @@
+name: Terraform AI Review
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  terraform-ai-review:
+    runs-on: [self-hosted, linux, x64]
+
+    env:
+      OLLAMA_MODEL: ${{ vars.OLLAMA_MODEL }}
+      OLLAMA_BASE_URL: ${{ vars.OLLAMA_BASE_URL }}
+      PYTHON_BIN: ${{ vars.PYTHON_BIN }}
+
+      # Only needed if you are NOT using EC2 IAM role
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Check Tools
+        run: |
+          terraform version
+          $PYTHON_BIN --version
+          curl -s http://localhost:11434/api/tags
+
+      - name: Install Python Dependencies
+        run: |
+          $PYTHON_BIN -m pip install --user openai requests
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Format Check
+        run: terraform fmt -check
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan Using tfvars
+        run: terraform plan -var-file="terraform.tfvars" -out=tfplan
+
+      - name: Convert Plan to Text
+        run: terraform show -no-color tfplan > tfplan.txt
+
+      - name: Run AI Review
+        run: $PYTHON_BIN ai/ai_review.py > ai-report.txt
+
+      - name: Show AI Report
+        run: cat ai-report.txt
+
+      - name: Send Slack Report
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: $PYTHON_BIN ai/slack_send.py
