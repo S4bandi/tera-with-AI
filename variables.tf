@@ -8,12 +8,14 @@ variable "project_name" {
   type        = string
 }
 
+variable "environment" {
+  description = "Enviroment name such as dev or prod"
+  type        = string
+}
+
+
 variable "my_ip" {
   description = "Allowed IP CIDR for SSH access"
   type        = string
 }
 
-variable "environment" {
-  description = "Enviroment name"
-  type        = string
-}
