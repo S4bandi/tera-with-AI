@@ -2,8 +2,16 @@ from openai import OpenAI
 import os
 import sys
 
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+raw_url = os.getenv("OLLAMA_BASE_URL")
+print(f"DEBUG raw OLLAMA_BASE_URL={raw_url!r}", file=sys.stderr)
+
+OLLAMA_BASE_URL = (raw_url or "").strip().strip('"').strip("'") or "http://localhost:11434/v1"
+if not OLLAMA_BASE_URL.startswith(("http://", "https://")):
+    OLLAMA_BASE_URL = "http://" + OLLAMA_BASE_URL
+
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
+
+print(f"Using {OLLAMA_BASE_URL} with model {OLLAMA_MODEL}", file=sys.stderr)
 
 if not os.path.exists("tfplan.txt"):
     print("ERROR: tfplan.txt not found.")
