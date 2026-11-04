@@ -1,0 +1,61 @@
+name: Terraform Destroy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to destroy"
+        required: true
+        default: "prod"
+        type: choice
+        options:
+          - dev
+          - prod
+
+permissions:
+  contents: read
+
+jobs:
+  terraform-destroy:
+    runs-on: [self-hosted, linux, x64]
+
+    environment:
+      name: ${{ github.event.inputs.environment == 'prod' && 'production' || 'development' }}
+
+    env:
+      TF_ENV: ${{ github.event.inputs.environment }}
+      TFVARS_FILE: envs/${{ github.event.inputs.environment }}.tfvars
+      BACKEND_CONFIG: backend-${{ github.event.inputs.environment }}.hcl
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check tools
+        run: |
+          terraform version
+          aws --version
+          aws sts get-caller-identity
+
+      - name: Terraform init
+        run: terraform init -backend-config=$BACKEND_CONFIG
+
+      - name: Terraform validate
+        run: terraform validate
+
+      - name: Terraform destroy plan
+        run: terraform plan -destroy -var-file=$TFVARS_FILE -out=destroy.tfplan
+
+      - name: Show destroy plan
+        run: terraform show -no-color destroy.tfplan
+
+      - name: Send Slack destroy warning
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+          --data "{\"text\":\"⚠️ Terraform destroy started for environment: $TF_ENV by $GITHUB_ACTOR\"}" \
+          $SLACK_WEBHOOK_URL
+
+      - name: Terraform destroy
+        run: terraform apply -auto-approve destroy.tfplan

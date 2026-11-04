@@ -1,0 +1,74 @@
+name: Terraform Drift Detection
+
+on:
+  schedule:
+    - cron: "30 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drift-detection:
+    runs-on: [self-hosted, linux, x64]
+
+    env:
+      TF_ENV: prod
+      TFVARS_FILE: envs/prod.tfvars
+      BACKEND_CONFIG: backend-prod.hcl
+      OLLAMA_MODEL: ${{ vars.OLLAMA_MODEL }}
+      OLLAMA_BASE_URL: ${{ vars.OLLAMA_BASE_URL }}
+      PYTHON_BIN: ${{ vars.PYTHON_BIN }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Python dependencies
+        run: |
+          $PYTHON_BIN -m pip install --user openai requests
+
+      - name: Terraform init
+        run: terraform init -backend-config=$BACKEND_CONFIG
+
+      - name: Terraform drift plan
+        shell: bash
+        run: |
+          set +e
+          terraform plan -var-file=$TFVARS_FILE -detailed-exitcode -out=tfplan
+          code=$?
+          echo $code > drift_exit_code.txt
+
+          if [ "$code" = "1" ]; then
+            echo "Terraform plan failed."
+            exit 1
+          fi
+
+          if [ "$code" = "0" ]; then
+            echo "No drift detected." > tfplan.txt
+          fi
+
+          if [ "$code" = "2" ]; then
+            terraform show -no-color tfplan > tfplan.txt
+          fi
+
+          exit 0
+
+      - name: Run AI drift review
+        run: $PYTHON_BIN ai/ai_review.py > ai-report.txt
+
+      - name: Show drift report
+        run: cat ai-report.txt
+
+      - name: Send Slack drift report only if drift found
+        shell: bash
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          code=$(cat drift_exit_code.txt)
+
+          if [ "$code" = "2" ]; then
+            $PYTHON_BIN ai/slack_send.py
+          else
+            echo "No drift. Slack notification skipped."
+          fi

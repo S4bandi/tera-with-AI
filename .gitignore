@@ -4,4 +4,8 @@
 tfplan
 tfplan.txt
 ai-report.txt
+tflint.txt
+checkov.txt
+infracost.txt
+*_exit_code.txt
 .env
