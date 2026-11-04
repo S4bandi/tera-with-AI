@@ -1,0 +1,139 @@
+name: Terraform PR AI Review
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  terraform-review:
+    runs-on: [self-hosted, linux, x64]
+
+    env:
+      TF_ENV: ${{ vars.TF_ENV }}
+      TFVARS_FILE: envs/${{ vars.TF_ENV }}.tfvars
+      BACKEND_CONFIG: backend-${{ vars.TF_ENV }}.hcl
+      OLLAMA_MODEL: ${{ vars.OLLAMA_MODEL }}
+      OLLAMA_BASE_URL: ${{ vars.OLLAMA_BASE_URL }}
+      PYTHON_BIN: ${{ vars.PYTHON_BIN }}
+      INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check required tools
+        run: |
+          terraform version
+          $PYTHON_BIN --version
+          curl -s http://localhost:11434/api/tags
+
+      - name: Install Python dependencies
+        run: |
+          $PYTHON_BIN -m pip install --user openai requests checkov
+
+      - name: Terraform Init
+        run: terraform init -input=false -backend-config=$BACKEND_CONFIG
+
+      - name: Terraform fmt check
+        run: terraform fmt -check -recursive
+
+      - name: Terraform validate
+        run: terraform validate
+
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v4
+
+      - name: TFLint init
+        run: tflint --init
+
+      - name: Run TFLint
+        shell: bash
+        run: |
+          set +e
+          tflint --format compact | tee tflint.txt
+          echo ${PIPESTATUS[0]} > tflint_exit_code.txt
+          exit 0
+
+      - name: Run Checkov
+        shell: bash
+        run: |
+          set +e
+          checkov -d . --framework terraform --var-file $TFVARS_FILE --quiet | tee checkov.txt
+          echo ${PIPESTATUS[0]} > checkov_exit_code.txt
+          exit 0
+
+      - name: Terraform Plan
+        run: terraform plan -input=false -var-file=$TFVARS_FILE -out=tfplan
+
+      - name: Convert Terraform plan to text
+        run: terraform show -no-color tfplan > tfplan.txt
+
+      - name: Setup Infracost
+        if: env.INFRACOST_API_KEY != ''
+        uses: infracost/actions/setup@v3
+        with:
+          api-key: ${{ secrets.INFRACOST_API_KEY }}
+
+      - name: Run Infracost
+        if: env.INFRACOST_API_KEY != ''
+        run: |
+          infracost breakdown \
+            --path . \
+            --terraform-var-file $TFVARS_FILE \
+            --format table > infracost.txt
+
+      - name: Skip Infracost if no API key
+        if: env.INFRACOST_API_KEY == ''
+        run: echo "Infracost skipped because INFRACOST_API_KEY is not configured." > infracost.txt
+
+      - name: Run AI review
+        run: $PYTHON_BIN ai/ai_review.py > ai-report.txt
+
+      - name: Show AI report
+        run: cat ai-report.txt
+
+      - name: Send Slack report
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: $PYTHON_BIN ai/slack_send.py
+
+      - name: Comment AI report on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const report = fs.readFileSync('ai-report.txt', 'utf8');
+            const body = `## Terraform AI Review\n\n\`\`\`\n${report.substring(0, 6000)}\n\`\`\``;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+
+      - name: Fail if TFLint found issues
+        shell: bash
+        run: |
+          code=$(cat tflint_exit_code.txt)
+          if [ "$code" != "0" ]; then
+            echo "TFLint found issues. Failing pipeline."
+            exit 1
+          fi
+
+      - name: Fail if Checkov found issues
+        shell: bash
+        run: |
+          code=$(cat checkov_exit_code.txt)
+          if [ "$code" != "0" ]; then
+            echo "Checkov found security/compliance issues. Failing pipeline."
+            exit 1
+          fi

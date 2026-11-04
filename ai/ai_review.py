@@ -13,35 +13,81 @@ OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
 
 print(f"Using {OLLAMA_BASE_URL} with model {OLLAMA_MODEL}", file=sys.stderr)
 
-if not os.path.exists("tfplan.txt"):
-    print("ERROR: tfplan.txt not found.")
-    sys.exit(1)
+TF_ENV = os.getenv("TF_ENV", "prod")
+GITHUB_REPOSITORY = os.getenv("GITHUB_REPOSITORY", "local")
+GITHUB_REF_NAME = os.getenv("GITHUB_REF_NAME", "local")
+GITHUB_ACTOR = os.getenv("GITHUB_ACTOR", "local")
+
+def read_file(path, max_chars=60000):
+    if not os.path.exists(path):
+        return f"{path} not found."
+    with open(path, "r", errors="ignore") as file:
+        return file.read()[:max_chars]
+
+
+terraform_plan = read_file("tfplan.txt")
+tflint_report = read_file("tflint.txt")
+checkov_report = read_file("checkov.txt")
+infracost_report = read_file("infracost.txt")
 
 client = OpenAI(
     base_url=OLLAMA_BASE_URL,
     api_key="ollama"
 )
 
-with open("tfplan.txt", "r") as file:
-    terraform_plan = file.read()
-
 prompt = f"""
-You are a senior Terraform, AWS, DevOps, and AIOps expert.
+You are a senior Terraform, AWS, DevSecOps, FinOps, and AIOps reviewer.
 
-Review this Terraform plan.
+Review the Terraform plan and tool outputs.
 
-Give output in this format:
+Project Context:
+- Environment: {TF_ENV}
+- Repository: {GITHUB_REPOSITORY}
+- Branch: {GITHUB_REF_NAME}
+- Triggered by: {GITHUB_ACTOR}
 
-1. Summary of infrastructure
-2. Resources that will be created
-3. Security risks
-4. Cost risks
-5. Best-practice issues
-6. Recommended fixes
-7. Beginner-friendly explanation
+Return output in this exact format:
+
+Risk Score: Low / Medium / High / Critical
+
+Summary:
+- Explain what infrastructure changes are planned.
+
+Resources:
+- List important resources that will be created, changed, or destroyed.
+
+Security Findings:
+- Finding:
+  Risk:
+  Recommendation:
+
+Cost Findings:
+- Finding:
+  Risk:
+  Recommendation:
+
+Compliance / Best Practice Findings:
+- Finding:
+  Risk:
+  Recommendation:
+
+Production Approval Recommendation:
+Approved / Not Approved
+
+Beginner-Friendly Explanation:
+- Explain this in simple DevOps language for students.
 
 Terraform Plan:
 {terraform_plan}
+
+TFLint Output:
+{tflint_report}
+
+Checkov Output:
+{checkov_report}
+
+Infracost Output:
+{infracost_report}
 """
 
 response = client.chat.completions.create(
@@ -49,7 +95,7 @@ response = client.chat.completions.create(
     messages=[
         {
             "role": "system",
-            "content": "You are an expert Terraform infrastructure reviewer."
+            "content": "You are an expert Terraform, AWS, DevSecOps, FinOps, and AIOps reviewer."
         },
         {
             "role": "user",
